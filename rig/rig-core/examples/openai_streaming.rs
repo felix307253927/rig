@@ -5,13 +5,15 @@ use rig::streaming::StreamingPrompt;
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    dotenvy::dotenv()?;
     // Uncomment tracing for debugging
     tracing_subscriber::fmt().init();
 
     // Create streaming agent with a single context prompt
     let agent = openai::Client::from_env()
-        .agent(openai::GPT_4O)
-        .preamble("Be precise and concise.")
+        .completions_api()
+        .agent(std::env::var("MODEL")?)
+        .preamble("Be precise and concise.用中文回答")
         .temperature(0.5)
         .build();
 
@@ -22,8 +24,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let res = stream_to_stdout(&mut stream).await?;
 
-    println!("Token usage response: {usage:?}", usage = res.usage());
-    println!("Final text response: {message:?}", message = res.response());
+    tracing::info!("Token usage response: {usage:?}", usage = res.usage());
+    tracing::info!("Final text response: {message:?}", message = res.response());
 
     Ok(())
 }

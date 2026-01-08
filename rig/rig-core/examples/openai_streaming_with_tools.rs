@@ -1,7 +1,11 @@
-use anyhow::Result;
-use rig::agent::stream_to_stdout;
-use rig::prelude::*;
+use std::env;
 
+use anyhow::Result;
+use futures::StreamExt;
+use rig::agent::{FinalResponse, MultiTurnStreamItem, Text};
+use rig::message::Reasoning;
+use rig::prelude::*;
+use rig::streaming::StreamedAssistantContent;
 use rig::{completion::ToolDefinition, providers, streaming::StreamingPrompt, tool::Tool};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -91,16 +95,18 @@ impl Tool for Subtract {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    dotenvy::dotenv()?;
     tracing_subscriber::fmt().init();
 
     // Create agent with a single context prompt and two tools
     let calculator_agent = providers::openai::Client::from_env()
-        .agent(providers::openai::GPT_4O)
+        .completions_api()
+        .agent(env::var("MODEL")?)
         .preamble(
             "You are a calculator here to help the user perform arithmetic
             operations. Use the tools provided to answer the user's question.
             make your answer long, so we can test the streaming functionality,
-            like 20 words",
+            like 20 words,用中文回答",
         )
         .max_tokens(1024)
         .tool(Adder)
@@ -109,10 +115,39 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let mut stream = calculator_agent.stream_prompt("Calculate 2 - 5").await;
 
-    let res = stream_to_stdout(&mut stream).await?;
+    let mut final_res = FinalResponse::empty();
+    tracing::info!("Streaming started:");
+    while let Some(content) = stream.next().await {
+        match content {
+            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
+                Text { text },
+            ))) => {
+                print!("{text}");
+                std::io::Write::flush(&mut std::io::stdout()).unwrap();
+            }
+            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(
+                Reasoning { reasoning, .. },
+            ))) => {
+                let reasoning = reasoning.join("\n");
+                print!("{reasoning}");
+                std::io::Write::flush(&mut std::io::stdout()).unwrap();
+            }
+            Ok(MultiTurnStreamItem::FinalResponse(res)) => {
+                println!("\n");
+                final_res = res;
+            }
+            Err(err) => {
+                tracing::error!("Error: {err}");
+            }
+            _ => {}
+        }
+    }
 
-    println!("Token usage response: {usage:?}", usage = res.usage());
-    println!("Final text response: {message:?}", message = res.response());
+    tracing::info!("Token usage response: {usage:?}", usage = final_res.usage());
+    tracing::info!(
+        "Final text response: {message:?}",
+        message = final_res.response()
+    );
 
     Ok(())
 }
