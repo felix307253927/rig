@@ -1,10 +1,7 @@
 use anyhow::Result;
 use rig::prelude::*;
-use rig::{
-    completion::{Prompt, ToolDefinition},
-    providers,
-    tool::Tool,
-};
+use rig::streaming::StreamingPrompt;
+use rig::{completion::ToolDefinition, providers, tool::Tool};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -94,18 +91,16 @@ impl Tool for Subtract {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_target(false)
-        .init();
+    dotenvy::dotenv()?;
+    tracing_subscriber::fmt().init();
 
     // Create OpenAI client
-    let openai_client = providers::openai::Client::from_env();
+    let openai_client = providers::openai::Client::from_env().completions_api();
 
     // Create agent with a single context prompt and two tools
     let calculator_agent = openai_client
-        .agent(providers::openai::GPT_4O)
-        .preamble("You are a calculator here to help the user perform arithmetic operations. Use the tools provided to answer the user's question.")
+        .agent(std::env::var("MODEL")?)
+        .preamble("You are a calculator here to help the user perform arithmetic operations. Use the tools provided to answer the user's question.用中文回答")
         .max_tokens(1024)
         .tool(Adder)
         .tool(Subtract)
@@ -113,19 +108,18 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Create agent which has the calculator_agent as a tool
     let agent_using_agent = openai_client
-        .agent(providers::openai::GPT_4O)
-        .preamble("You are a helpful assistant that can solve problems. Use the tool provided to answer the user's question.")
+        .agent(std::env::var("MODEL")?)
+        .preamble("You are a helpful assistant that can solve problems. Use the tool provided to answer the user's question.用中文回答")
         .max_tokens(1024)
         .tool(calculator_agent)
         .build();
 
     // Prompt the agent and print the response
-    println!("Calculate 2 - 5");
+    tracing::info!("Calculate 2 - 5");
 
-    println!(
-        "OpenAI Agent-Using Agent: {}",
-        agent_using_agent.prompt("Calculate 2 - 5").await?
-    );
+    let mut stream = agent_using_agent.stream_prompt("Calculate 2 - 5").await;
+    let res = rig::agent::stream_to_stdout(&mut stream).await?;
+    tracing::info!("Response: {res:?}");
 
     Ok(())
 }
