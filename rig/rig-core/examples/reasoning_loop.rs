@@ -4,7 +4,7 @@ use rig::{
     completion::{CompletionError, CompletionModel, Prompt, PromptError, ToolDefinition},
     extractor::Extractor,
     message::Message,
-    providers::anthropic,
+    providers::openai,
     tool::Tool,
 };
 use schemars::JsonSchema;
@@ -62,21 +62,19 @@ impl<M: CompletionModel> Prompt for ReasoningAgent<M> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_target(false)
-        .init();
+    dotenvy::dotenv()?;
+    tracing_subscriber::fmt().init();
 
     // Create Anthropic client
-    let anthropic_client = anthropic::Client::from_env();
+    let client = openai::Client::from_env().completions_api();
     let agent = ReasoningAgent {
-        chain_of_thought_extractor: anthropic_client
-            .extractor(anthropic::completion::CLAUDE_3_5_SONNET)
+        chain_of_thought_extractor: client
+            .extractor(std::env::var("MODEL")?)
             .preamble(CHAIN_OF_THOUGHT_PROMPT)
             .build(),
 
-        executor: anthropic_client
-            .agent(anthropic::completion::CLAUDE_3_5_SONNET)
+        executor: client
+            .agent(std::env::var("MODEL")?)
             .preamble(
                 "You are an assistant here to help the user select which tool is most appropriate to perform arithmetic operations.
                 Follow these instructions closely.

@@ -1,8 +1,8 @@
-use rig::agent::{CancelSignal, PromptHook};
+use rig::agent::{CancelSignal, PromptHook, PromptRequest};
 use rig::client::{CompletionClient, ProviderClient};
 use rig::completion::{CompletionModel, CompletionResponse, Message, Prompt};
 use rig::message::{AssistantContent, UserContent};
-use rig::providers::{self, openai};
+use rig::providers::openai;
 
 #[derive(Clone)]
 struct SessionIdHook<'a> {
@@ -17,7 +17,7 @@ impl<'a, M: CompletionModel> PromptHook<M> for SessionIdHook<'a> {
         args: &str,
         _cancel_sig: CancelSignal,
     ) {
-        println!(
+        tracing::info!(
             "[Session {}] Calling tool: {} with call ID: {tool_call_id} with args: {}",
             self.session_id,
             tool_name,
@@ -33,9 +33,12 @@ impl<'a, M: CompletionModel> PromptHook<M> for SessionIdHook<'a> {
         result: &str,
         _cancel_sig: CancelSignal,
     ) {
-        println!(
+        tracing::info!(
             "[Session {}] Tool result for {} (args: {}): {}",
-            self.session_id, tool_name, args, result
+            self.session_id,
+            tool_name,
+            args,
+            result
         );
     }
 
@@ -45,7 +48,7 @@ impl<'a, M: CompletionModel> PromptHook<M> for SessionIdHook<'a> {
         _history: &[Message],
         _cancel_sig: CancelSignal,
     ) {
-        println!(
+        tracing::info!(
             "[Session {}] Sending prompt: {}",
             self.session_id,
             match prompt {
@@ -80,9 +83,9 @@ impl<'a, M: CompletionModel> PromptHook<M> for SessionIdHook<'a> {
         _cancel_sig: CancelSignal,
     ) {
         if let Ok(resp) = serde_json::to_string(&response.raw_response) {
-            println!("[Session {}] Received response: {}", self.session_id, resp);
+            tracing::info!("[Session {}] Received response: {}", self.session_id, resp);
         } else {
-            println!(
+            tracing::error!(
                 "[Session {}] Received response: <non-serializable>",
                 self.session_id
             );
@@ -93,11 +96,14 @@ impl<'a, M: CompletionModel> PromptHook<M> for SessionIdHook<'a> {
 // Example main function (pseudo-code, as actual Agent/CompletionModel setup is project-specific)
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    let client = providers::openai::Client::from_env();
+    dotenvy::dotenv()?;
+    tracing_subscriber::fmt().init();
+
+    let client = openai::Client::from_env().completions_api();
 
     // Create agent with a single context prompt
     let comedian_agent = client
-        .agent(openai::GPT_4O)
+        .agent(std::env::var("MODEL")?)
         .preamble("You are a comedian here to entertain the user using humour and jokes.")
         .build();
 
@@ -105,10 +111,12 @@ async fn main() -> Result<(), anyhow::Error> {
     let hook = SessionIdHook { session_id };
 
     // Prompt the agent and print the response
-    comedian_agent
+    let response = comedian_agent
         .prompt("Entertain me!")
         .with_hook(hook)
         .await?;
+
+    tracing::info!("Response:\n\n{:?}", response);
 
     Ok(())
 }

@@ -1,7 +1,9 @@
 use rig::prelude::*;
-use rig::providers::openai::client::Client;
 use rig::{
-    Embed, completion::Prompt, embeddings::EmbeddingsBuilder, providers::openai,
+    Embed,
+    completion::{CompletionModel, Prompt},
+    embeddings::EmbeddingsBuilder,
+    providers::openai,
     vector_store::in_memory_store::InMemoryVectorStore,
 };
 use serde::Serialize;
@@ -18,17 +20,64 @@ struct WordDefinition {
     definitions: Vec<String>,
 }
 
+#[derive(Clone, Default)]
+struct RagHook;
+
+impl<M: CompletionModel> rig::agent::PromptHook<M> for RagHook {
+    async fn on_completion_call(
+        &self,
+        prompt: &rig::message::Message,
+        _history: &[rig::message::Message],
+        _cancel_sig: rig::agent::CancelSignal,
+    ) {
+        tracing::info!("[RAG] Prompt: {:?}", prompt);
+    }
+    async fn on_completion_response(
+        &self,
+        _prompt: &rig::message::Message,
+        response: &rig::completion::CompletionResponse<M::Response>,
+        _cancel_sig: rig::agent::CancelSignal,
+    ) {
+        tracing::info!("[RAG] Token: {:?}", response.usage);
+        tracing::info!("[RAG] Choice: {:?}", response.choice);
+        if let Ok(resp) = serde_json::to_value(&response.raw_response) {
+            tracing::info!("[RAG] Received response: {}", resp);
+        } else {
+            tracing::error!("[RAG] Received response: <non-serializable>",);
+        }
+    }
+    async fn on_tool_call(
+        &self,
+        tool_name: &str,
+        _tool_call_id: Option<String>,
+        _args: &str,
+        _cancel_sig: rig::agent::CancelSignal,
+    ) {
+        tracing::info!("[RAG] Tool call: {:?}", tool_name);
+    }
+
+    async fn on_tool_result(
+        &self,
+        tool_name: &str,
+        _tool_call_id: Option<String>,
+        _args: &str,
+        _result: &str,
+        _cancel_sig: rig::agent::CancelSignal,
+    ) {
+        tracing::info!("[RAG] Tool result: {:?}", tool_name);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_target(false)
-        .init();
+    dotenvy::dotenv()?;
+    tracing_subscriber::fmt().init();
 
     // Create OpenAI client
-    let openai_client = Client::from_env();
-    let embedding_model = openai_client.embedding_model(openai::TEXT_EMBEDDING_ADA_002);
+    let openai_client = openai::Client::from_env();
+    let embedding_model = openai_client
+        .embedding_model(std::env::var("EMBEDDING_MODEL")?)
+        .encoding_format(openai::EncodingFormat::Float);
 
     // Generate embeddings for the definitions of all the documents using the specified embedding model.
     let embeddings = EmbeddingsBuilder::new(embedding_model.clone())
@@ -65,18 +114,21 @@ async fn main() -> Result<(), anyhow::Error> {
     let vector_store = InMemoryVectorStore::from_documents(embeddings);
     // Create vector store index
     let index = vector_store.index(embedding_model);
-    let rag_agent = openai_client.agent(openai::GPT_4O)
+    let rag_agent = openai_client.completions_api().agent(std::env::var("MODEL")?)
         .preamble("
             You are a dictionary assistant here to assist the user in understanding the meaning of words.
-            You will find additional non-standard word definitions that could be useful below.
+            You will find additional non-standard word definitions that could be useful below.用中文回答
         ")
         .dynamic_context(1, index)
         .build();
 
     // Prompt the agent and print the response
-    let response = rag_agent.prompt("What does \"glarb-glarb\" mean?").await?;
+    let prompt_request = rag_agent
+        .prompt("What does \"glarb-glarb\" mean?")
+        .with_hook(RagHook::default());
+    let response = prompt_request.await?;
 
-    println!("{response}");
+    tracing::info!("\nResponse:\n\n{response}");
 
     Ok(())
 }
